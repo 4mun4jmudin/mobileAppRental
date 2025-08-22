@@ -1,30 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_app_rental/core/constants/app_colors.dart';
+import 'package:mobile_app_rental/core/services/api_service.dart';
 
 class CarCard extends StatelessWidget {
-  final String carId; // Ubah dari mock ID ke ID asli
-  final String? imageUrl; // Ubah dari asset ke URL (nullable)
-  final String name;
-  final double pricePerDay;
-  final double rating;
+  final Map<String, dynamic> carData;
 
-  const CarCard({
-    super.key,
-    required this.carId, // Tambahkan carId
-    this.imageUrl,
-    required this.name,
-    required this.pricePerDay,
-    required this.rating,
-  });
+  const CarCard({super.key, required this.carData});
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
 
+    final carId = carData['id']?.toString() ?? '0';
+    final name = '${carData['brand'] ?? ''} ${carData['model'] ?? ''}';
+    final pricePerDay =
+        double.tryParse(carData['price_per_day']?.toString() ?? '0.0') ?? 0.0;
+    final rating =
+        double.tryParse(carData['reviews_avg_rating']?.toString() ?? '0.0') ??
+        0.0;
+
+    final imageUrls = (carData['image_urls'] is List)
+        ? List<String>.from(carData['image_urls'])
+        : <String>[];
+    final imageUrl = imageUrls.isNotEmpty ? imageUrls.first : null;
+
+    // --- INI CARA PALING AMAN MEMBANGUN URL ---
+    final storageUrlBase = ApiService.getBaseUrl().replaceAll(
+      '/api/',
+      '/storage/',
+    );
+    final fullImageUrl = imageUrl != null ? '$storageUrlBase$imageUrl' : null;
+
     return GestureDetector(
       onTap: () {
-        // Navigasi ke halaman detail dengan ID mobil asli
         context.push('/car/$carId');
       },
       child: Container(
@@ -44,21 +53,26 @@ class CarCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Ganti Image.asset menjadi Image.network
             ClipRRect(
               borderRadius: const BorderRadius.vertical(
                 top: Radius.circular(16),
               ),
-              child: imageUrl != null && imageUrl!.isNotEmpty
+              child: fullImageUrl != null
                   ? Image.network(
-                      imageUrl!,
+                      fullImageUrl,
                       height: 120,
                       width: double.infinity,
                       fit: BoxFit.cover,
-                      loadingBuilder: (context, child, progress) =>
-                          progress == null
-                          ? child
-                          : const Center(child: CircularProgressIndicator()),
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return Container(
+                          height: 120,
+                          color: AppColors.lightGrey,
+                          child: const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        );
+                      },
                       errorBuilder: (context, error, stackTrace) => Container(
                         height: 120,
                         color: AppColors.lightGrey,
@@ -69,7 +83,6 @@ class CarCard extends StatelessWidget {
                       ),
                     )
                   : Container(
-                      // Tampilan jika tidak ada gambar
                       height: 120,
                       color: AppColors.lightGrey,
                       child: const Icon(
@@ -79,7 +92,6 @@ class CarCard extends StatelessWidget {
                       ),
                     ),
             ),
-            // Detail Mobil (tidak ada perubahan)
             Padding(
               padding: const EdgeInsets.all(12.0),
               child: Column(
@@ -89,7 +101,6 @@ class CarCard extends StatelessWidget {
                     name,
                     style: textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: AppColors.black,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -97,13 +108,12 @@ class CarCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Icon(Icons.star, color: AppColors.accent, size: 16),
+                      const Icon(Icons.star, color: AppColors.accent, size: 16),
                       const SizedBox(width: 4),
                       Text(
                         rating.toStringAsFixed(1),
                         style: textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.bold,
-                          color: AppColors.grey,
                         ),
                       ),
                     ],

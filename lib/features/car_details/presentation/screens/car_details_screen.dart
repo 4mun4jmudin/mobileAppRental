@@ -1,3 +1,4 @@
+// import 'package.carousel_slider/carousel_slider.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -17,9 +18,10 @@ class CarDetailsScreen extends StatefulWidget {
 }
 
 class _CarDetailsScreenState extends State<CarDetailsScreen> {
-  late Future<Map<String, dynamic>> _carDetailsFuture;
-  Map<String, dynamic>? _carData;
+  // Cukup satu Future untuk menampung proses pengambilan data dari API
+  late final Future<Map<String, dynamic>> _carDetailsFuture;
 
+  // State untuk data booking yang akan dikirim ke halaman checkout
   DateTimeRange? _selectedDateRange;
   int _numberOfDays = 0;
   double _totalPrice = 0.0;
@@ -27,30 +29,17 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _carDetailsFuture = _fetchCarDetailsFromApi();
+    // Panggil API untuk mengambil detail mobil saat halaman pertama kali dibuka
+    _carDetailsFuture = ApiService.fetchCarDetails(widget.carId);
   }
 
-  // --- PERBAIKAN UTAMA DI SINI ---
-  // Fungsi ini sekarang hanya memanggil ApiService, bukan mencoba mengimplementasikan logikanya sendiri.
-  Future<Map<String, dynamic>> _fetchCarDetailsFromApi() async {
-    final result = await ApiService.fetchCarDetails(widget.carId);
-    if (result['success'] == true && result['data'] != null) {
-      // Simpan data ke state agar bisa diakses oleh widget lain seperti bottom bar
-      _carData = Map<String, dynamic>.from(result['data']);
-      return _carData!;
-    } else {
-      throw Exception(result['message'] ?? 'Gagal memuat detail mobil');
-    }
-  }
-
-  void _calculatePrice() {
-    if (_selectedDateRange != null && _carData != null) {
+  // Fungsi untuk menghitung total harga berdasarkan data mobil dari API
+  void _calculatePrice(double pricePerDay) {
+    if (_selectedDateRange != null) {
       final duration = _selectedDateRange!.end.difference(
         _selectedDateRange!.start,
       );
       _numberOfDays = duration.inDays + 1;
-      final pricePerDay =
-          double.tryParse(_carData!['price_per_day'].toString()) ?? 0.0;
       _totalPrice = _numberOfDays * pricePerDay;
     } else {
       _numberOfDays = 0;
@@ -72,87 +61,103 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
         iconTheme: const IconThemeData(color: AppColors.black),
         elevation: 1,
       ),
+      // Gunakan FutureBuilder sebagai root dari body untuk mengelola state
       body: FutureBuilder<Map<String, dynamic>>(
         future: _carDetailsFuture,
         builder: (context, snapshot) {
+          // 1. Saat data sedang dimuat
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snapshot.hasError) {
+
+          // 2. Jika terjadi error atau request gagal
+          if (snapshot.hasError ||
+              !snapshot.hasData ||
+              !(snapshot.data?['success'] ?? false)) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
-                child: Text('Terjadi kesalahan: ${snapshot.error}'),
+                child: Text(
+                  'Gagal memuat detail mobil: ${snapshot.error ?? snapshot.data?['message']}',
+                ),
               ),
             );
           }
-          if (!snapshot.hasData) {
-            return const Center(child: Text('Data mobil tidak ditemukan.'));
-          }
-          // Jika data berhasil dimuat, bangun konten utama
-          return _buildContent(snapshot.data!);
+
+          // 3. Jika data berhasil dimuat
+          final carData = snapshot.data!['data'] as Map<String, dynamic>;
+          final pricePerDay =
+              double.tryParse(carData['price_per_day'].toString()) ?? 0.0;
+
+          return Stack(
+            children: [
+              // Konten utama yang bisa di-scroll
+              SingleChildScrollView(
+                padding: const EdgeInsets.only(
+                  bottom: 120,
+                ), // Beri ruang untuk bottom bar
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildImageSlider(carData['image_urls'] as List?),
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildHeader(carData),
+                          const SizedBox(height: 16),
+                          _buildFeatures(
+                            carData['features'] as Map<String, dynamic>?,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            carData['description'] ?? 'Tidak ada deskripsi.',
+                            style: const TextStyle(
+                              color: AppColors.grey,
+                              height: 1.5,
+                            ),
+                          ),
+                          const Divider(height: 32),
+                          _buildSectionTitle('Ulasan Pengguna'),
+                          const SizedBox(height: 8),
+                          const ReviewTile(
+                            reviewData: {},
+                          ), // Ulasan masih statis untuk saat ini
+                          const Divider(height: 32),
+                          _buildSectionTitle('Pilih Tanggal Sewa'),
+                          const SizedBox(height: 16),
+                          _buildCalendar(pricePerDay),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Bottom bar diposisikan di bawah layar
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _buildBottomBar(context, carData),
+              ),
+            ],
+          );
         },
       ),
-      // Tampilkan bottom bar hanya jika data mobil sudah berhasil dimuat
-      bottomNavigationBar: _carData != null ? _buildBottomBar() : null,
     );
   }
 
-  Widget _buildContent(Map<String, dynamic> car) {
-    final reviews = (car['reviews'] as List? ?? [])
-        .map((r) => Map<String, dynamic>.from(r))
-        .toList();
-    final double bottomBarHeight = 90.0;
-    final double safeBottom = MediaQuery.of(context).padding.bottom;
+  // --- WIDGET BUILDER HELPERS ---
 
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: bottomBarHeight + safeBottom + 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildImageSlider(car),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(car),
-                const SizedBox(height: 16),
-                _buildFeatures(car),
-                const SizedBox(height: 16),
-                Text(
-                  car['description'] ?? 'Tidak ada deskripsi.',
-                  style: const TextStyle(color: AppColors.grey, height: 1.5),
-                ),
-                const Divider(height: 32),
-                _buildSectionTitle('Ulasan Pengguna (${reviews.length})'),
-                const SizedBox(height: 8),
-                if (reviews.isNotEmpty)
-                  // PERBAIKAN: Menghapus .toList() yang tidak perlu saat menggunakan spread operator (...)
-                  ...reviews.map((review) => ReviewTile(reviewData: review))
-                else
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16.0),
-                    child: Text(
-                      'Belum ada ulasan untuk mobil ini.',
-                      style: TextStyle(color: AppColors.grey),
-                    ),
-                  ),
-                const Divider(height: 32),
-                _buildSectionTitle('Pilih Tanggal Sewa'),
-                const SizedBox(height: 16),
-                _buildCalendar(),
-              ],
-            ),
-          ),
-        ],
-      ),
+  Widget _buildImageSlider(List? images) {
+    final imageUrls = (images is List) ? List<String>.from(images) : <String>[];
+    final storageUrlBase = ApiService.getBaseUrl().replaceAll(
+      '/api/',
+      '/storage/',
     );
-  }
 
-  Widget _buildImageSlider(Map<String, dynamic> car) {
-    final images = (car['image_urls'] as List? ?? []);
-    if (images.isEmpty) {
+    if (imageUrls.isEmpty) {
       return Container(
         height: 250,
         color: AppColors.lightGrey,
@@ -163,40 +168,37 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
         ),
       );
     }
-    final baseUrl = ApiService.getBaseUrl().replaceAll('/api/', '');
+
     return CarouselSlider.builder(
-      itemCount: images.length,
-      itemBuilder: (context, index, realIndex) {
-        final imageUrl = '$baseUrl/storage/${images[index]}';
-        return Image.network(
-          imageUrl,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          loadingBuilder: (context, child, progress) => progress == null
-              ? child
-              : const Center(child: CircularProgressIndicator()),
-          errorBuilder: (context, error, stack) =>
-              const Icon(Icons.broken_image, size: 50, color: AppColors.grey),
-        );
-      },
+      itemCount: imageUrls.length,
+      itemBuilder: (context, index, realIndex) => Image.network(
+        '$storageUrlBase${imageUrls[index]}',
+        fit: BoxFit.cover,
+        width: double.infinity,
+      ),
       options: CarouselOptions(
         height: 250,
         viewportFraction: 1.0,
-        autoPlay: images.length > 1,
+        autoPlay:
+            imageUrls.length >
+            1, // Aktifkan autoPlay jika gambar lebih dari satu
       ),
     );
   }
 
-  Widget _buildHeader(Map<String, dynamic> car) {
+  Widget _buildHeader(Map<String, dynamic> carData) {
+    final name = '${carData['brand'] ?? ''} ${carData['model'] ?? ''}';
     final rating =
-        double.tryParse(car['reviews_avg_rating']?.toString() ?? '0.0') ?? 0.0;
+        double.tryParse(carData['reviews_avg_rating']?.toString() ?? '0.0') ??
+        0.0;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: Text(
-            '${car['brand']} ${car['model']}',
+            name,
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
           ),
         ),
@@ -215,40 +217,39 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
     );
   }
 
-  Widget _buildFeatures(Map<String, dynamic> car) {
-    final features = (car['features'] as List? ?? [])
-        .map((f) => f.toString())
-        .toList();
+  Widget _buildFeatures(Map<String, dynamic>? features) {
+    if (features == null || features.isEmpty) {
+      return const Center(
+        child: Text(
+          'Tidak ada fitur tambahan.',
+          style: TextStyle(color: AppColors.grey),
+        ),
+      );
+    }
+
+    // Fitur dari JSON Laravel Anda adalah object, bukan array, jadi kita cek key-nya
+    final featureWidgets = <Widget>[
+      if (features['ac'] == true) _buildFeatureIcon(Icons.ac_unit, 'AC Dingin'),
+      if (features['gps'] == true) _buildFeatureIcon(Icons.gps_fixed, 'GPS'),
+      if (features['bluetooth'] == true)
+        _buildFeatureIcon(Icons.bluetooth, 'Bluetooth'),
+      if (features['usb'] == true) _buildFeatureIcon(Icons.usb, 'USB Port'),
+    ];
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceAround,
-      children: [
-        _buildFeatureIcon(Icons.ac_unit, 'AC', features.contains('AC')),
-        _buildFeatureIcon(
-          Icons.bluetooth,
-          'Bluetooth',
-          features.contains('Bluetooth'),
-        ),
-        _buildFeatureIcon(Icons.gps_fixed, 'GPS', features.contains('GPS')),
-        _buildFeatureIcon(Icons.usb, 'USB Port', features.contains('USB Port')),
-      ],
+      children: featureWidgets,
     );
   }
 
-  Widget _buildFeatureIcon(IconData icon, String label, bool isAvailable) {
+  Widget _buildFeatureIcon(IconData icon, String label) {
     return Column(
       children: [
-        Icon(
-          icon,
-          color: isAvailable ? AppColors.primaryGreen : AppColors.lightGrey,
-          size: 28,
-        ),
+        Icon(icon, color: AppColors.primaryGreen, size: 28),
         const SizedBox(height: 4),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: isAvailable ? AppColors.grey : AppColors.lightGrey,
-          ),
+          style: const TextStyle(fontSize: 12, color: AppColors.grey),
         ),
       ],
     );
@@ -261,9 +262,9 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
     );
   }
 
-  Widget _buildCalendar() {
+  Widget _buildCalendar(double pricePerDay) {
     return TableCalendar(
-      locale: 'id_ID',
+      locale: 'id_ID', // Menampilkan kalender dalam Bahasa Indonesia
       focusedDay: DateTime.now(),
       firstDay: DateTime.now(),
       lastDay: DateTime.now().add(const Duration(days: 365)),
@@ -274,7 +275,7 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
         } else {
           _selectedDateRange = null;
         }
-        _calculatePrice();
+        _calculatePrice(pricePerDay);
       },
       selectedDayPredicate: (day) {
         if (_selectedDateRange == null) return false;
@@ -283,22 +284,22 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
             (day.isAfter(_selectedDateRange!.start) &&
                 day.isBefore(_selectedDateRange!.end));
       },
-      calendarStyle: const CalendarStyle(
-        selectedDecoration: BoxDecoration(
+      calendarStyle: CalendarStyle(
+        selectedDecoration: const BoxDecoration(
           color: AppColors.primaryGreen,
           shape: BoxShape.circle,
         ),
-        rangeStartDecoration: BoxDecoration(
+        rangeStartDecoration: const BoxDecoration(
           color: AppColors.primaryGreen,
           shape: BoxShape.circle,
         ),
-        rangeEndDecoration: BoxDecoration(
+        rangeEndDecoration: const BoxDecoration(
           color: AppColors.primaryGreen,
           shape: BoxShape.circle,
         ),
-        rangeHighlightColor: Color(0x26009C22), // primaryGreen with opacity
+        rangeHighlightColor: AppColors.primaryGreen.withAlpha(51),
         todayDecoration: BoxDecoration(
-          color: AppColors.lightGrey,
+          color: AppColors.grey.withAlpha(128),
           shape: BoxShape.circle,
         ),
       ),
@@ -309,70 +310,72 @@ class _CarDetailsScreenState extends State<CarDetailsScreen> {
     );
   }
 
-  Widget _buildBottomBar() {
+  Widget _buildBottomBar(BuildContext context, Map<String, dynamic> carData) {
     final currencyFormatter = NumberFormat.currency(
       locale: 'id_ID',
-      symbol: 'Rp ',
+      symbol: 'Rp',
       decimalDigits: 0,
     );
-    final double bottomBarHeight = 90.0;
-    final double safeBottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
-      height: bottomBarHeight + safeBottom,
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + safeBottom * 0.5),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
-          // PERBAIKAN: Mengganti .withOpacity() yang deprecated
           BoxShadow(
-            color: Colors.black.withAlpha(15),
-            blurRadius: 8,
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
             offset: const Offset(0, -2),
           ),
         ],
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'Total Harga (${_numberOfDays > 0 ? '$_numberOfDays hari' : '-'})',
-                  style: const TextStyle(color: AppColors.grey, fontSize: 14),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  currencyFormatter.format(_totalPrice),
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryGreen,
+      padding: const EdgeInsets.all(16.0),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Total Harga ($_numberOfDays hari)',
+                    style: const TextStyle(color: AppColors.grey, fontSize: 14),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(
+                    currencyFormatter.format(_totalPrice),
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryGreen,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          SizedBox(
-            height: 48,
-            child: ElevatedButton(
+            ElevatedButton(
               onPressed: _selectedDateRange == null
                   ? null
                   : () {
                       final bookingData = {
-                        'carData': _carData,
+                        'carData': carData,
                         'dateRange': _selectedDateRange,
                         'totalPrice': _totalPrice,
                         'numberOfDays': _numberOfDays,
                       };
                       context.push('/checkout', extra: bookingData);
                     },
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+              ),
               child: const Text('Lanjutkan'),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
