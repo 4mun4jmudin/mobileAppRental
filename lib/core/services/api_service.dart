@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io'; // HAPUS/UBAH jika targetnya Flutter Web
+import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -7,33 +7,31 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// ApiService bertanggung jawab untuk semua komunikasi antara Flutter dan Laravel API.
 class ApiService {
-  // NOTE: jangan panggil getBaseUrl() di saat inisialisasi statis jika kamu butuh build web tanpa dart:io.
-  // Kita gunakan getter supaya lebih fleksibel.
-  static String get _baseUrl {
+  // PENTING: Base URL sekarang dinamis untuk menangani berbagai platform.
+  static final String _baseUrl = getBaseUrl();
+  static const Duration _timeout = Duration(seconds: 20);
+
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+
+  // Helper untuk menentukan base URL berdasarkan platform
+  static String getBaseUrl() {
     if (kIsWeb) {
-      return 'http://localhost:8000/api/'; // ubah jika perlu
-    }
-    // Untuk safety, bungkus penggunaan Platform dengan try/catch
-    try {
-      if (Platform.isAndroid) {
-        return 'http://10.0.2.2:8000/api/';
-      }
-      // default untuk perangkat fisik / simulator iOS atau Android lainnya
-      return 'http://192.168.1.89:8000/api/';
-    } catch (e) {
-      // Jika Platform tidak tersedia (mis. build web) fallback ke localhost
+      // Untuk web (Chrome, Firefox, dll)
       return 'http://localhost:8000/api/';
+    } else if (Platform.isAndroid) {
+      // Untuk Android Emulator, gunakan alamat khusus ini untuk mengakses localhost komputer
+      return 'http://10.0.2.2:8000/api/';
+    } else {
+      // Default untuk perangkat fisik (iOS/Android) atau iOS Simulator
+      // Ganti IP ini dengan alamat IP lokal komputer Anda.
+      // Contoh: 'http://192.168.1.5:8000/api/'
+      return 'http://192.168.137.1:8000/api/'; // PASTIKAN IP INI SESUAI
     }
   }
 
-  static const Duration _timeout = Duration(seconds: 20);
-  static final FlutterSecureStorage _secureStorage =
-      const FlutterSecureStorage();
-
-  // Helper untuk membuat URI
+  // --- Helpers ---
   static Uri _uri(String path) => Uri.parse('$_baseUrl$path');
 
-  // Headers, sertakan Authorization jika ada token
   static Future<Map<String, String>> _headers() async {
     final token = await getToken();
     final headers = {
@@ -46,96 +44,34 @@ class ApiService {
     return headers;
   }
 
-  // Tangani response dengan aman
   static Map<String, dynamic> _handleResponse(http.Response response) {
-    final contentType = response.headers['content-type'] ?? '';
-
-    // Jika header content-type tidak menyebutkan JSON, coba tetap parse tapi siapkan fallback
-    if (!contentType.toLowerCase().contains('application/json')) {
-      // debug log
-      debugPrint('WARNING: content-type bukan JSON: $contentType');
-      debugPrint(
-        'Response body (truncated): ${response.body.length > 500 ? response.body.substring(0, 500) + '...' : response.body}',
-      );
-      // coba parse jika body terlihat seperti JSON
-      try {
-        final maybe = jsonDecode(response.body);
-        // lanjutkan normal dengan 'maybe' sebagai body
-        return _processDecodedBody(response.statusCode, maybe);
-      } catch (e) {
-        return {
-          'success': false,
-          'message':
-              'Respons server tidak valid (bukan JSON). Cek log Laravel atau network proxy.',
-          'statusCode': response.statusCode,
-          'raw': response.body,
-        };
-      }
-    }
-
-    // Jika content-type JSON, coba decode dengan aman
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(response.body);
-    } catch (e) {
-      debugPrint('JSON decode error: ${e.toString()}');
+    // Tangani kasus di mana respons bukan JSON (misalnya, halaman error HTML dari Laravel)
+    if (!response.headers['content-type']!.contains('application/json')) {
       return {
         'success': false,
-        'message': 'Gagal mem-parse JSON dari server: ${e.toString()}',
-        'statusCode': response.statusCode,
-        'raw': response.body,
+        'message': 'Respons server tidak valid. Cek log Laravel untuk error.',
       };
     }
 
-    return _processDecodedBody(response.statusCode, decoded);
-  }
+    final body = jsonDecode(response.body);
 
-  // Proses body yang sudah didecode menjadi bentuk Map yang konsisten
-  static Map<String, dynamic> _processDecodedBody(
-    int statusCode,
-    dynamic body,
-  ) {
-    // Ambil data jika backend membungkus di 'data', jika tidak gunakan seluruh body
-    dynamic data;
-    String message = 'Sukses';
-    if (body is Map && body.containsKey('data')) {
-      data = body['data'];
-      message = (body['message'] is String) ? body['message'] : message;
-    } else {
-      data = body;
-      if (body is Map && body['message'] is String) {
-        message = body['message'];
-      }
-    }
-
-    if (statusCode >= 200 && statusCode < 300) {
-      return {'success': true, 'data': data, 'raw': body, 'message': message};
-    } else {
-      // Coba ambil pesan error dari berbagai bentuk Laravel
-      String errorMessage = 'Terjadi kesalahan (status $statusCode).';
-
-      if (body is String && body.isNotEmpty) {
-        errorMessage = body;
-      } else if (body is Map) {
-        if (body['message'] is String) {
-          errorMessage = body['message'];
-        } else if (body['errors'] is Map) {
-          // body['errors'] biasanya Map<String, List<String>>
-          final first = (body['errors'] as Map).values.first;
-          if (first is List && first.isNotEmpty) {
-            errorMessage = first.first.toString();
-          } else if (first is String) {
-            errorMessage = first;
-          }
-        }
-      }
-
+    if (response.statusCode >= 200 && response.statusCode < 300) {
       return {
-        'success': false,
-        'message': errorMessage,
-        'statusCode': statusCode,
-        'raw': body,
+        'success': true,
+        // Backend Anda mungkin membungkus data dalam key 'data' atau tidak,
+        // kode ini menangani keduanya.
+        'data': body['data'] ?? body,
+        'message': body['message'] ?? 'Sukses',
       };
+    } else {
+      String errorMessage = 'Terjadi kesalahan.';
+      if (body['message'] is String) {
+        errorMessage = body['message'];
+      } else if (body['errors'] is Map) {
+        // Ambil pesan error validasi pertama dari Laravel
+        errorMessage = (body['errors'] as Map).values.first[0];
+      }
+      return {'success': false, 'message': errorMessage};
     }
   }
 
@@ -145,25 +81,6 @@ class ApiService {
   static Future<String?> getToken() => _secureStorage.read(key: 'access_token');
   static Future<void> clearToken() =>
       _secureStorage.delete(key: 'access_token');
-
-  // Helper kecil untuk mengekstrak token dari berbagai format respons
-  static String? _extractTokenFromRaw(dynamic raw) {
-    if (raw == null) return null;
-    if (raw is Map) {
-      // cek beberapa lokasi umum
-      if (raw['token'] != null && raw['token'] is String) return raw['token'];
-      if (raw['access_token'] != null && raw['access_token'] is String)
-        return raw['access_token'];
-
-      if (raw['data'] is Map) {
-        final d = raw['data'] as Map;
-        if (d['token'] != null && d['token'] is String) return d['token'];
-        if (d['access_token'] != null && d['access_token'] is String)
-          return d['access_token'];
-      }
-    }
-    return null;
-  }
 
   // --- Generic Request Methods ---
   static Future<Map<String, dynamic>> _get(String path) async {
@@ -207,11 +124,11 @@ class ApiService {
       'email': email,
       'password': password,
       'password_confirmation': passwordConfirmation,
+      'role': 'penyewa',
     });
-
-    if (result['success'] == true) {
-      final token = _extractTokenFromRaw(result['raw']);
-      if (token != null) await saveToken(token);
+    // Simpan token setelah registrasi berhasil
+    if (result['success'] == true && result['data']?['access_token'] != null) {
+      await saveToken(result['data']['access_token']);
     }
     return result;
   }
@@ -221,9 +138,16 @@ class ApiService {
     required String password,
   }) async {
     final result = await _post('login', {'email': email, 'password': password});
-    if (result['success'] == true) {
-      final token = _extractTokenFromRaw(result['raw']);
-      if (token != null) await saveToken(token);
+    // Simpan token setelah login berhasil
+    if (result['success'] == true && result['data']?['access_token'] != null) {
+      final userRole = result['data']?['user']?['role'];
+      if (userRole != 'penyewa') {
+        return {
+          'success': false,
+          'message': 'Hanya customer yang dapat login.',
+        };
+      }
+      await saveToken(result['data']['access_token']);
     }
     return result;
   }
@@ -233,7 +157,6 @@ class ApiService {
       await _post('logout', {});
     } catch (e) {
       // Abaikan error saat logout, yang penting token lokal dihapus
-      debugPrint('Logout request error: ${e.toString()}');
     } finally {
       await clearToken();
     }
@@ -242,9 +165,14 @@ class ApiService {
 
   // --- App Data Endpoints ---
   static Future<Map<String, dynamic>> fetchCars() => _get('cars');
+
+  static Future<Map<String, dynamic>> fetchBanners() => _get('banners');
+
   static Future<Map<String, dynamic>> fetchCarDetails(String carId) =>
       _get('cars/$carId');
+
   static Future<Map<String, dynamic>> fetchMyBookings() => _get('my-bookings');
+
   static Future<Map<String, dynamic>> fetchUser() => _get('user');
 }
 
